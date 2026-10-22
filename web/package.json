@@ -1,0 +1,17 @@
+{
+  "name": "quantpocket-web",
+  "version": "1.0.0",
+  "description": "QuantPocket web platform: backtesting, paper & live trading (Alpaca), QuantConnect, SMS/voice control, scheduled trades, tax reports.",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "DB_FILE=:memory: node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "express": "^4.21.2"
+  }
+}
