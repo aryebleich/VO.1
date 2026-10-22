@@ -1,0 +1,46 @@
+# Publishes the public homepage, pricing and legal pages to GitHub Pages (free).
+# One-time setup: Settings > Pages > Source: "GitHub Actions".
+# Set the repository variable APP_URL (Settings > Secrets and variables > Actions > Variables)
+# to your app's address, e.g. https://quantpocket.onrender.com, so buttons and the demo use it.
+name: Deploy homepage to GitHub Pages
+on:
+  push:
+    branches: [main]
+    paths: ['web/public/**', 'web/src/engine.js', '.github/workflows/pages.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static site
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          mkdir -p _site
+          cd web/public
+          cp index.html terms.html privacy.html risk.html contact.html 404.html site.css site.js favicon.svg icon-512.png og.png manifest.webmanifest ../../_site/
+          cp ../src/engine.js ../../_site/engine.js
+          cd ../../_site
+          APP="${APP_URL%/}"
+          echo "window.QP = { api: '${APP}', standalone: true };" > config.js
+          # Absolute URLs for social previews, and an app start URL for the installable icon.
+          if [ -n "$APP" ]; then sed -i "s#\"start_url\": \"/app\"#\"start_url\": \"${APP}/app\"#" manifest.webmanifest; fi
+          sed -i "s#content=\"og.png\"#content=\"https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/og.png\"#" *.html
+          touch .nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

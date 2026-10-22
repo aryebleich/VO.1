@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuantPocket</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0b1324">
+  <meta name="robots" content="noindex">
+  <meta name="description" content="Backtest, paper trade and automate stock strategies with Alpaca and QuantConnect.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="top" hidden>
+    <a class="brand" href="#/dashboard"><img src="/favicon.svg" alt="" width="24" height="24" style="vertical-align:-5px;margin-right:6px">Quant<span>Pocket</span></a>
+    <nav id="nav"></nav>
+    <button id="logout" class="ghost">Sign out</button>
+  </header>
+  <main id="view"></main>
+  <footer>
+    <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/risk">Risk Disclosure</a> · <a href="/contact">Support</a><br>
+    Trading involves risk of loss. Backtests and projections are hypothetical and do not guarantee future results.
+    QuantPocket is software, not a broker or investment adviser; orders route to your own Alpaca account.
+  </footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

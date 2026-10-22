@@ -78,3 +78,17 @@ export function verifyStripe(raw, header) {
   const want = crypto.createHmac('sha256', secret).update(`${parts.t}.${raw}`).digest('hex');
   return !!parts.v1 && parts.v1.length === want.length && crypto.timingSafeEqual(Buffer.from(parts.v1), Buffer.from(want));
 }
+
+// Transactional email through Resend (free tier: 3,000/month). Without a key the message is
+// logged, which is enough for local development.
+export const emailEnabled = () => !!env('RESEND_API_KEY');
+export async function sendEmail(to, subject, text) {
+  if (!emailEnabled()) { console.log(`[email disabled] to ${to}: ${subject}\n${text}`); return { simulated: true }; }
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + env('RESEND_API_KEY'), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: env('EMAIL_FROM') || 'QuantPocket <onboarding@resend.dev>', to: [to], subject, text }),
+  });
+  if (!r.ok) throw new Error('Email ' + r.status + ' ' + (await r.text()).slice(0, 200));
+  return r.json();
+}

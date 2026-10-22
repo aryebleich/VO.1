@@ -59,27 +59,27 @@ export async function handleCommand(user, text, { pinVerified = false } = {}) {
       const [, amt, sym, freq = 'WEEKLY'] = args;
       const repeat = { DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly' }[freq] || 'weekly';
       if (!amt?.startsWith('$') || !sym) return 'Usage: DCA $50 SPY WEEKLY 1234';
-      const r = run('INSERT INTO scheduled_orders (user_id, account, symbol, side, notional, repeat, next_run, created_at) VALUES (?,?,?,?,?,?,?,?)',
+      const r = await run('INSERT INTO scheduled_orders (user_id, account, symbol, side, notional, repeat, next_run, created_at) VALUES (?,?,?,?,?,?,?,?)',
         user.id, account, sym, 'buy', +amt.slice(1), repeat, nextRunAfter(now(), 'daily'), now());
       return `Scheduled #${r.lastInsertRowid}: buy ${amt} ${sym} ${repeat}.`;
     }
     case 'ORDERS': {
-      const rows = all('SELECT * FROM scheduled_orders WHERE user_id = ? AND active = 1', user.id);
+      const rows = await all('SELECT * FROM scheduled_orders WHERE user_id = ? AND active = 1', user.id);
       return rows.length ? rows.map(o => `#${o.id} ${o.side} ${o.qty ?? '$' + o.notional} ${o.symbol} ${o.repeat} next ${new Date(o.next_run).toISOString().slice(0, 16)}Z`).join('\n') : 'No scheduled trades.';
     }
     case 'CANCEL': {
       if (!pinOk()) return needPin;
-      const r = run('UPDATE scheduled_orders SET active = 0 WHERE id = ? AND user_id = ?', +args[1], user.id);
+      const r = await run('UPDATE scheduled_orders SET active = 0 WHERE id = ? AND user_id = ?', +args[1], user.id);
       return r.changes ? `Cancelled #${args[1]}.` : 'Not found.';
     }
     case 'BOTS': {
-      const rows = all('SELECT id, name, symbol, deployed, last_action FROM strategies WHERE user_id = ? AND deployed IS NOT NULL', user.id);
+      const rows = await all('SELECT id, name, symbol, deployed, last_action FROM strategies WHERE user_id = ? AND deployed IS NOT NULL', user.id);
       return rows.length ? rows.map(b => `#${b.id} ${b.name} ${b.symbol} on ${b.deployed}${b.last_action ? ' - ' + b.last_action : ''}`).join('\n') : 'No bots running.';
     }
     case 'PAUSE': {
       if (!pinOk()) return needPin;
-      run('UPDATE strategies SET deployed = NULL WHERE user_id = ?', user.id);
-      run('UPDATE scheduled_orders SET active = 0 WHERE user_id = ?', user.id);
+      await run('UPDATE strategies SET deployed = NULL WHERE user_id = ?', user.id);
+      await run('UPDATE scheduled_orders SET active = 0 WHERE user_id = ?', user.id);
       return 'All bots and scheduled trades paused.';
     }
     default: return 'Unknown command. Text HELP for the list.';

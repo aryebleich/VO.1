@@ -16,13 +16,13 @@ export function verifySecret(secret, stored) {
   return want.length === key.length && crypto.timingSafeEqual(key, want);
 }
 
+// ENCRYPTION_KEY: 64 hex chars, or any random string of 32+ characters (hashed to 256 bits).
 function masterKey() {
-  const k = process.env.ENCRYPTION_KEY;
-  if (!k || Buffer.from(k, 'hex').length !== 32) {
-    if (process.env.NODE_ENV === 'production') throw new Error('ENCRYPTION_KEY must be 64 hex chars in production');
-    return crypto.createHash('sha256').update('dev-only-insecure-key').digest();
-  }
-  return Buffer.from(k, 'hex');
+  const k = process.env.ENCRYPTION_KEY || '';
+  if (/^[0-9a-f]{64}$/i.test(k)) return Buffer.from(k, 'hex');
+  if (k.length >= 32) return crypto.createHash('sha256').update(k).digest();
+  if (process.env.NODE_ENV === 'production') throw new Error('ENCRYPTION_KEY must be set (32+ random characters) in production');
+  return crypto.createHash('sha256').update('dev-only-insecure-key').digest();
 }
 export function encrypt(obj) {
   const iv = crypto.randomBytes(12);

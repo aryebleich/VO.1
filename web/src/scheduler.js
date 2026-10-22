@@ -26,12 +26,12 @@ function nyTime(t = now()) {
 export const marketOpen = (t = now()) => { const n = nyTime(t); return !['Sat', 'Sun'].includes(n.weekday) && n.minutes >= 570 && n.minutes < 960; };
 
 async function notify(userId, msg) {
-  const u = one('SELECT phone, phone_verified FROM users WHERE id = ?', userId);
+  const u = await one('SELECT phone, phone_verified FROM users WHERE id = ?', userId);
   if (u?.phone && u.phone_verified) await sendSms(u.phone, msg).catch(e => console.warn('sms', e.message));
 }
 
 export async function runScheduledOrders(t = now()) {
-  const due = all('SELECT * FROM scheduled_orders WHERE active = 1 AND next_run <= ?', t);
+  const due = await all('SELECT * FROM scheduled_orders WHERE active = 1 AND next_run <= ?', t);
   for (const o of due) {
     let result;
     try {
@@ -39,7 +39,7 @@ export async function runScheduledOrders(t = now()) {
       result = `${r.status}${r.price ? ' @ ' + r.price.toFixed(2) : ''}`;
     } catch (e) { result = 'error: ' + e.message; }
     const next = nextRunAfter(o.next_run, o.repeat);
-    run('UPDATE scheduled_orders SET last_result = ?, next_run = COALESCE(?, next_run), active = ? WHERE id = ?', result, next, next ? 1 : 0, o.id);
+    await run('UPDATE scheduled_orders SET last_result = ?, next_run = COALESCE(?, next_run), active = ? WHERE id = ?', result, next, next ? 1 : 0, o.id);
     notify(o.user_id, `Scheduled ${o.side} ${o.symbol}: ${result}`);
   }
   return due.length;
@@ -48,8 +48,8 @@ export async function runScheduledOrders(t = now()) {
 // Bots evaluate their rules once per trading day, shortly before the close (15:45 New York).
 export async function runBots(t = now()) {
   const n = nyTime(t);
-  if (['Sat', 'Sun'].includes(n.weekday) || n.minutes < 945 || n.minutes >= 960) return 0;
-  const bots = all('SELECT * FROM strategies WHERE deployed IS NOT NULL AND (last_run IS NULL OR last_run != ?)', n.day);
+  if (['Sat', 'Sun'].includes(n.weekday) || n.minutes < 930 || n.minutes >= 960) return 0;
+  const bots = await all('SELECT * FROM strategies WHERE deployed IS NOT NULL AND (last_run IS NULL OR last_run != ?)', n.day);
   for (const b of bots) {
     let action = 'hold';
     try {
@@ -63,36 +63,36 @@ export async function runBots(t = now()) {
         if (notional >= 1) { await placeOrder(b.user_id, b.deployed, { symbol: b.symbol, side: 'buy', notional }, 'bot'); action = `bought $${notional}`; }
       }
     } catch (e) { action = 'error: ' + e.message; }
-    run('UPDATE strategies SET last_run = ?, last_action = ? WHERE id = ?', n.day, action, b.id);
+    await run('UPDATE strategies SET last_run = ?, last_action = ? WHERE id = ?', n.day, action, b.id);
     if (action !== 'hold') notify(b.user_id, `Bot "${b.name}" ${b.symbol}: ${action}`);
   }
   return bots.length;
 }
 
 export async function runAlerts() {
-  const alerts = all('SELECT * FROM alerts WHERE active = 1');
+  const alerts = await all('SELECT * FROM alerts WHERE active = 1');
   for (const a of alerts) {
     const px = await lastPrice(a.symbol, a.user_id).catch(() => null);
     if (px == null) continue;
     if ((a.op === 'above' && px >= a.price) || (a.op === 'below' && px <= a.price)) {
-      run('UPDATE alerts SET active = 0 WHERE id = ?', a.id);
+      await run('UPDATE alerts SET active = 0 WHERE id = ?', a.id);
       notify(a.user_id, `Alert: ${a.symbol} is ${px.toFixed(2)} (${a.op} ${a.price})`);
     }
   }
 }
 
 export async function snapshotAll() {
-  for (const u of all('SELECT id FROM users')) await snapshotEquity(u.id).catch(() => {});
+  for (const u of await all('SELECT id FROM users')) await snapshotEquity(u.id).catch(() => {});
 }
 
 // Monthly: assess performance fees on every account with a high-water mark.
 export async function assessAllFees() {
   const out = [];
-  for (const s of all('SELECT user_id, account FROM fee_state')) {
+  for (const s of await all('SELECT user_id, account FROM fee_state')) {
     try {
-      if (s.account === 'alpaca' && !getCred(s.user_id, 'alpaca')) continue;
+      if (s.account === 'alpaca' && !(await getCred(s.user_id, 'alpaca'))) continue;
       const sum = await accountSummary(s.user_id, s.account);
-      out.push({ userId: s.user_id, account: s.account, ...assessFee(s.user_id, s.account, sum.equity) });
+      out.push({ userId: s.user_id, account: s.account, ...(await assessFee(s.user_id, s.account, sum.equity)) });
     } catch (e) { out.push({ userId: s.user_id, account: s.account, error: e.message }); }
   }
   return out;

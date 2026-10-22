@@ -65,15 +65,23 @@ const routes = {};
 async function render() {
   const [route, q] = (location.hash.slice(2) || 'dashboard').split('?');
   const view = $('#view');
-  if (!ME && !['login', 'register', 'mfa'].includes(route)) { location.hash = '#/login'; return; }
+  if (!ME && !['login', 'register', 'mfa', 'forgot', 'reset', 'verify'].includes(route)) { location.hash = '#/login'; return; }
   $('#top').hidden = !ME;
   if (ME) $('#nav').innerHTML = [...NAV, ...(ME.role === 'admin' ? [['admin', 'Admin']] : [])].map(([k, t]) => `<a href="#/${k}" class="${k === route ? 'on' : ''}">${t}</a>`).join('');
   view.innerHTML = '<p class="mu">Loading…</p>';
-  try { await (routes[route] || routes.dashboard)(view, new URLSearchParams(q)); }
+  try {
+    await (routes[route] || routes.dashboard)(view, new URLSearchParams(q));
+    if (ME && !ME.emailVerified && !['verify'].includes(route)) {
+      const b = document.createElement('div'); b.className = 'banner';
+      b.innerHTML = 'Please confirm your email address. <a href="#" id="resend">Resend the link</a>';
+      view.prepend(b);
+      $('#resend', b).onclick = async e => { e.preventDefault(); await api('/auth/verify/resend', { body: {} }); b.textContent = 'Sent. Check your inbox.'; };
+    }
+  }
   catch (e) { view.innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
 }
 window.addEventListener('hashchange', render);
-$('#logout').onclick = async () => { await api('/auth/logout', { body: {} }); ME = null; location.hash = '#/login'; };
+$('#logout').onclick = async () => { await api('/auth/logout', { body: {} }); ME = null; location.href = '/'; };
 
 const accountSwitch = () => `<div class="seg" id="acctseg">${[['paper', 'Paper'], ['alpaca', 'Alpaca']].map(([k, t]) => `<button class="${state.account === k ? 'on' : ''}" data-a="${k}">${t}</button>`).join('')}</div>`;
 function wireAccountSwitch(view) {
@@ -88,7 +96,7 @@ routes.login = view => {
     <label>Email<input name="email" type="email" autocomplete="username" required></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
     <button>Sign in</button><div class="err"></div>
-    <p class="mu">New here? <a href="#/register">Create an account</a></p></form>`;
+    <p class="mu"><a href="#/forgot">Forgot password?</a> · New here? <a href="#/register">Create an account</a></p></form>`;
   act($('button', view), async () => {
     const r = await api('/auth/login', { body: form(view) });
     if (r.mfaRequired) { location.hash = '#/mfa'; return; }
@@ -100,14 +108,30 @@ routes.register = view => {
   <form class="card auth"><h2>Create account</h2>
     <label>Email<input name="email" type="email" autocomplete="username" required></label>
     <label>Password (10+ chars, upper, lower, digit)<input name="password" type="password" autocomplete="new-password" required></label>
-    <label><input type="checkbox" name="agree" style="width:auto"> I understand trading is risky and backtests do not predict future returns.</label>
+    <label><input type="checkbox" name="agree" style="width:auto"> I agree to the <a href="/terms" target="_blank">Terms</a> and <a href="/privacy" target="_blank">Privacy Policy</a> and have read the <a href="/risk" target="_blank">Risk Disclosure</a>.</label>
     <button>Create account</button><div class="err"></div>
     <p class="mu">You start with a $100,000 paper account. <a href="#/login">Sign in instead</a></p></form>`;
   act($('button', view), async () => {
     const f = form(view);
-    if (!f.agree) throw new Error('Please confirm the risk notice');
+    if (!f.agree) throw new Error('Please accept the Terms to continue');
     ME = (await api('/auth/register', { body: f })).user; location.hash = '#/dashboard';
   });
+};
+routes.forgot = view => {
+  view.innerHTML = `<form class="card auth"><h2>Reset your password</h2><p class="mu">Enter your email and we will send you a reset link.</p>
+    <label>Email<input name="email" type="email" autocomplete="username" required></label>
+    <button>Send reset link</button><div class="err"></div><p class="mu"><a href="#/login">Back to sign in</a></p></form>`;
+  act($('button', view), async () => { await api('/auth/forgot', { body: form(view) }); return 'If that email has an account, a reset link is on its way.'; });
+};
+routes.reset = (view, q) => {
+  view.innerHTML = `<form class="card auth"><h2>Choose a new password</h2>
+    <label>New password (10+ chars, upper, lower, digit)<input name="password" type="password" autocomplete="new-password" required></label>
+    <button>Save password</button><div class="err"></div></form>`;
+  act($('button', view), async () => { await api('/auth/reset', { body: { ...form(view), token: q.get('token') } }); setTimeout(() => (location.hash = '#/login'), 1500); return 'Password changed. You can sign in now.'; });
+};
+routes.verify = async (view, q) => {
+  try { await api('/auth/verify', { body: { token: q.get('token') } }); if (ME) ME.emailVerified = true; view.innerHTML = `<div class="card auth"><h2>Email confirmed</h2><p><a href="#/dashboard">Continue</a></p></div>`; }
+  catch (e) { view.innerHTML = `<div class="card auth"><h2>Link problem</h2><p class="err">${esc(e.message)}</p></div>`; }
 };
 routes.mfa = view => {
   view.innerHTML = `<form class="card auth"><h2>Two-factor code</h2><p class="mu">Open your authenticator app.</p>
@@ -125,7 +149,12 @@ routes.dashboard = async view => {
   }
   const base = a.startCash ?? a.history[0]?.equity ?? a.equity;
   const pnl = a.equity - base, pnlPct = base ? pnl / base * 100 : 0;
+  const steps = [[ME.emailVerified, 'Confirm your email', '#/dashboard'], [ME.totpEnabled, 'Turn on two-factor login', '#/settings'], [a.positions.length > 0 || state.account !== 'paper', 'Place your first paper trade', '#/dashboard'],
+    [ME.phoneVerified && ME.hasPin, 'Add your phone and PIN for SMS', '#/settings'], [!!sessionStorage.getItem('qp_strategy'), 'Backtest a strategy', '#/backtest']];
+  const todo = steps.filter(x => !x[0]).length > 1 && !localStorage.getItem('qp_onboard_done');
   view.innerHTML = `
+  ${todo ? `<div class="card"><div class="row" style="justify-content:space-between"><h2>Get started</h2><button class="ghost small" id="hideOnboard">Hide</button></div>
+    ${steps.map(([done, t, href]) => `<p style="margin:6px 0">${done ? '✅' : '⬜'} <a href="${href}">${t}</a></p>`).join('')}</div>` : ''}
   <div class="row" style="justify-content:space-between"><h1>Portfolio ${a.live ? '<span class="pill warn">LIVE MONEY</span>' : state.account === 'alpaca' ? '<span class="pill">Alpaca paper</span>' : '<span class="pill">Simulated</span>'}</h1>${accountSwitch()}</div>
   <div class="card">
     <div class="stats">
@@ -152,6 +181,7 @@ routes.dashboard = async view => {
   <div class="card"><h2>Recent orders</h2><div class="tablewrap" id="orders"><p class="mu">Loading…</p></div>
     ${state.account === 'paper' ? '<button class="ghost small" id="reset">Reset paper account</button>' : ''}</div>`;
   wireAccountSwitch(view);
+  if ($('#hideOnboard', view)) $('#hideOnboard', view).onclick = () => { try { localStorage.setItem('qp_onboard_done', '1'); } catch {} render(); };
   drawChart($('#eqc', view), a.history.map(x => x.equity), { base });
   const t = $('#ticket', view);
   act($('button', t), async () => {
@@ -262,7 +292,7 @@ function optimizeHtml(o) {
 routes.bots = async view => {
   const list = await api('/strategies');
   view.innerHTML = `<h1>Strategies & Bots</h1>
-  <div class="banner">A deployed bot checks its rules once per trading day at 3:45 pm New York time and buys or sells on the chosen account. Text BOTS to see them, PAUSE &lt;PIN&gt; to stop all.</div>
+  <div class="banner">A deployed bot checks its rules once per trading day shortly before the 4 pm New York close and buys or sells on the chosen account. Text BOTS to see them, PAUSE &lt;PIN&gt; to stop all.</div>
   <div class="card tablewrap"><table><tr><th>Name</th><th>Symbol</th><th>Entry</th><th>Exit</th><th>Running on</th><th>Last action</th><th></th></tr>
   ${list.map(s => `<tr data-id="${s.id}"><td>${esc(s.name)}</td><td>${esc(s.symbol)}</td><td><code>${esc(s.entry)}</code></td><td><code>${esc(s.exit)}</code></td>
     <td>${s.deployed ? `<span class="pill ${s.deployed === 'alpaca' ? 'warn' : ''}">${s.deployed}</span>` : '<span class="mu">off</span>'}</td><td>${esc(s.last_action || '')}</td>
@@ -448,6 +478,9 @@ routes.settings = async view => {
     <form class="card" id="pw"><h2>Password</h2><label>Current<input type="password" name="current" autocomplete="current-password"></label><label>New<input type="password" name="next" autocomplete="new-password"></label><button>Change password</button><div class="err"></div>
       <p class="mu" style="font-size:12px">Changing it signs out every other device.</p></form>
   </div>
+  <div class="card"><h2>Your data</h2><p class="mu">Download everything we store about you, or permanently delete your account.</p>
+    <a href="/api/auth/export"><button type="button" class="ghost">Download my data</button></a>
+    <label>Password to delete account<input type="password" id="delpw" autocomplete="current-password"></label><button class="danger" id="delacct">Delete my account</button><div class="err"></div></div>
   <div class="card tablewrap"><h2>Active sessions</h2><table>${sessions.map(s => `<tr><td>${esc(s.ip)}</td><td>${esc(s.ua.slice(0, 60))}</td><td>${date(s.createdAt)}</td><td>${s.current ? '<span class="pill">this device</span>' : `<button class="small ghost" data-s="${s.id}">Sign out</button>`}</td></tr>`).join('')}</table></div>
   <div class="card tablewrap"><h2>Security log</h2><table>${log.map(l => `<tr><td>${date(l.at)}</td><td>${esc(l.event)}</td><td>${esc(l.ip || '')}</td></tr>`).join('')}</table></div>`;
   const refreshMe = async () => { ME = (await api('/auth/me')).user; };
@@ -468,11 +501,15 @@ routes.settings = async view => {
   act($('button', $('#taxs', view)), async () => { const f = form($('#taxs', view)); await api('/tax/settings', { body: { bracket: +f.bracket, stateTax: f.stateTax / 100 } }); await refreshMe(); return 'Saved'; });
   act($('button', $('#pw', view)), async () => { await api('/auth/password', { body: form($('#pw', view)) }); return 'Password changed'; });
   $$('[data-s]', view).forEach(b => (b.onclick = async () => { await api('/auth/sessions/' + b.dataset.s, { method: 'DELETE' }); render(); }));
+  act($('#delacct', view), async () => {
+    if (!confirm('Delete your account and all data permanently? This cannot be undone. Your Alpaca account is not affected.')) return;
+    await api('/auth/delete', { body: { password: $('#delpw', view).value } }); location.href = '/';
+  });
 };
 
 // ---------- admin ----------
 routes.admin = async view => {
-  const s = await api('/admin/summary');
+  const [s, msgs] = await Promise.all([api('/admin/summary'), api('/admin/messages')]);
   const total = (kind, status) => s.byKind.filter(x => x.kind === kind && (!status || x.status === status)).reduce((a, x) => a + x.total, 0);
   view.innerHTML = `<h1>Admin</h1>
   <div class="card"><div class="stats">
@@ -483,9 +520,11 @@ routes.admin = async view => {
   </div><button id="assess">Assess performance fees now</button><div class="err"></div></div>
   <div class="card tablewrap"><h2>Fees due</h2><table>${s.feesDue.map(l => `<tr><td>${esc(l.email)}</td><td>${money(l.amount)}</td><td>${esc(l.memo)}</td><td><button class="small" data-l="${l.id}" data-s="collected">Mark collected</button> <button class="small ghost" data-l="${l.id}" data-s="waived">Waive</button></td></tr>`).join('') || '<tr><td class="mu">None</td></tr>'}</table></div>
   <div class="card tablewrap"><h2>Card deposits awaiting brokerage transfer</h2><table>${s.pendingTransfers.map(l => `<tr><td>${esc(l.email)}</td><td>${money(l.amount)}</td><td>${date(l.at)}</td><td><button class="small" data-l="${l.id}" data-s="transferred">Mark transferred</button></td></tr>`).join('') || '<tr><td class="mu">None</td></tr>'}</table></div>
+  <div class="card tablewrap"><h2>Support inbox</h2><table>${msgs.filter(m => m.status === 'open').map(m => `<tr><td>${date(m.at)}</td><td>${esc(m.name)} &lt;<a href="mailto:${esc(m.email)}">${esc(m.email)}</a>&gt;</td><td><b>${esc(m.subject)}</b><br><span class="mu" style="white-space:pre-wrap">${esc(m.body)}</span></td><td><button class="small ghost" data-m="${m.id}">Done</button></td></tr>`).join('') || '<tr><td class="mu">Inbox zero</td></tr>'}</table></div>
   <div class="card tablewrap"><h2>Users</h2><table><tr><th>Email</th><th>Plan</th><th>Role</th><th>2FA</th><th>Phone</th><th>Joined</th></tr>${s.users.map(u => `<tr><td>${esc(u.email)}</td><td>${u.plan}</td><td>${u.role}</td><td>${u.totp_enabled ? 'yes' : '-'}</td><td>${u.phone_verified ? 'yes' : '-'}</td><td>${date(u.created_at)}</td></tr>`).join('')}</table></div>`;
   act($('#assess', view), async () => { const r = await api('/admin/assess-fees', { body: {} }); setTimeout(render, 1200); return `Assessed ${r.length} accounts, ${money(r.reduce((a, x) => a + (x.fee || 0), 0))} in new fees`; });
   $$('[data-l]', view).forEach(b => (b.onclick = async () => { await api('/admin/ledger/' + b.dataset.l, { body: { status: b.dataset.s } }); render(); }));
+  $$('[data-m]', view).forEach(b => (b.onclick = async () => { await api('/admin/messages/' + b.dataset.m, { body: {} }); render(); }));
 };
 
 (async () => {

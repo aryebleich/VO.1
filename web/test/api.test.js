@@ -1,5 +1,4 @@
 // End-to-end API flow against an in-memory database, with no external services.
-process.env.DB_FILE = ':memory:';
 const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { app } = await import('../server.js');
@@ -73,4 +72,48 @@ test('lockout after repeated bad passwords', async () => {
   await call('/auth/register', { email: 'c@d.co', password: 'Str0ngPassword' });
   for (let i = 0; i < 5; i++) await call('/auth/login', { email: 'c@d.co', password: 'wrongWrong1' });
   assert.equal((await call('/auth/login', { email: 'c@d.co', password: 'Str0ngPassword' })).status, 423);
+});
+
+test('password reset, email verification, export and delete', async () => {
+  cookie = '';
+  const { one } = await import('../src/db.js');
+  const { sha256 } = await import('../src/crypto.js');
+  await call('/auth/register', { email: 'r@s.co', password: 'Str0ngPassword' });
+  const u = await one('SELECT * FROM users WHERE email = ?', 'r@s.co');
+  assert.ok(u.verify_hash);
+  // Tokens are stored hashed; plant a known one to exercise the endpoints.
+  await run('UPDATE users SET verify_hash = ? WHERE id = ?', sha256('vtok'), u.id);
+  assert.equal((await call('/auth/verify', { token: 'vtok' })).status, 200);
+  assert.equal((await call('/auth/me')).body.user.emailVerified, true);
+
+  assert.equal((await call('/auth/forgot', { email: 'nobody@x.co' })).body.ok, true);
+  await call('/auth/forgot', { email: 'r@s.co' });
+  await run('UPDATE users SET reset_hash = ? WHERE id = ?', sha256('rtok'), u.id);
+  assert.equal((await call('/auth/reset', { token: 'rtok', password: 'N3wPasswordXyz' })).status, 200);
+  assert.equal((await call('/auth/me')).body.user, null); // all sessions revoked
+  assert.equal((await call('/auth/reset', { token: 'rtok', password: 'N3wPasswordXyz' })).status, 400);
+  assert.equal((await call('/auth/login', { email: 'r@s.co', password: 'N3wPasswordXyz' })).status, 200);
+
+  const exp = await fetch(base + '/api/auth/export', { headers: { cookie } });
+  assert.match(exp.headers.get('content-disposition'), /attachment/);
+  assert.equal((await exp.json()).profile.email, 'r@s.co');
+  assert.equal((await call('/auth/delete', { password: 'wrong' })).status, 401);
+  assert.equal((await call('/auth/delete', { password: 'N3wPasswordXyz' })).status, 200);
+  assert.equal(await one('SELECT id FROM users WHERE email = ?', 'r@s.co'), undefined);
+});
+
+test('public demo, contact, health and cron tick', async () => {
+  const demo = await call('/public/backtest', { symbol: 'QQQ', preset: 'Breakout' });
+  assert.equal(demo.status, 200);
+  assert.ok(demo.body.curve.length > 10);
+  assert.equal((await call('/public/contact', { email: 'bad', body: 'x' })).status, 400);
+  assert.equal((await call('/public/contact', { email: 'a@b.co', body: 'Hi' })).status, 200);
+  const pre = await fetch(base + '/api/public/backtest', { method: 'OPTIONS', headers: { Origin: 'https://aryebleich.github.io' } });
+  assert.equal(pre.headers.get('access-control-allow-origin'), 'https://aryebleich.github.io');
+  assert.equal((await fetch(base + '/healthz')).status, 200);
+  assert.equal((await fetch(base + '/internal/tick', { method: 'POST' })).status, 401);
+  process.env.CRON_SECRET = 's3cret';
+  const tick = await fetch(base + '/internal/tick', { method: 'POST', headers: { Authorization: 'Bearer s3cret' } });
+  assert.equal(tick.status, 200);
+  assert.equal((await fetch(base + '/no-such-page')).status, 404);
 });

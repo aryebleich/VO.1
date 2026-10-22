@@ -1,14 +1,15 @@
-// SQLite storage via Node's built-in node:sqlite (no native build step).
-import { DatabaseSync } from 'node:sqlite';
+// Storage via libSQL: a local SQLite file by default, or a free hosted Turso database when
+// DATABASE_URL (libsql://...) and DATABASE_AUTH_TOKEN are set.
+import { createClient } from '@libsql/client';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const file = process.env.DB_FILE || path.resolve('data/quantpocket.db');
-if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-export const db = new DatabaseSync(file);
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+const url = process.env.DATABASE_URL || 'file:' + (process.env.DB_FILE || path.resolve('data/quantpocket.db'));
+if (url.startsWith('file:')) fs.mkdirSync(path.dirname(url.slice(5)), { recursive: true });
+if (url.startsWith('file:') && process.env.RENDER) console.warn('WARNING: using a local SQLite file on Render. Free instances lose files on restart; set DATABASE_URL to a Turso database.');
+export const db = createClient({ url, authToken: process.env.DATABASE_AUTH_TOKEN });
 
-db.exec(`
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
@@ -128,6 +129,14 @@ CREATE TABLE IF NOT EXISTS ledger (
   memo TEXT,
   at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER,
+  name TEXT, email TEXT NOT NULL,
+  subject TEXT, body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -137,18 +146,43 @@ CREATE TABLE IF NOT EXISTS alerts (
   active INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
-`);
+`;
 
-export const one = (sql, ...a) => db.prepare(sql).get(...a);
-export const all = (sql, ...a) => db.prepare(sql).all(...a);
-export const run = (sql, ...a) => db.prepare(sql).run(...a);
+// Columns added after the first release; ALTER fails harmlessly when they already exist.
+const MIGRATIONS = [
+  'ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN reset_hash TEXT',
+  'ALTER TABLE users ADD COLUMN reset_expires INTEGER',
+  'ALTER TABLE users ADD COLUMN verify_hash TEXT',
+];
+
+export const ready = (async () => {
+  if (url.startsWith('file:')) { await db.execute('PRAGMA journal_mode = WAL'); await db.execute('PRAGMA foreign_keys = ON'); }
+  await db.executeMultiple(SCHEMA);
+  for (const m of MIGRATIONS) await db.execute(m).catch(() => {});
+})();
+
+const plain = rs => rs.rows.map(r => Object.fromEntries(rs.columns.map((c, i) => [c, r[i]])));
+const exec = async (sql, args) => { await ready; return db.execute({ sql, args: args.map(a => (a === undefined ? null : a)) }); };
+
+export const one = async (sql, ...a) => plain(await exec(sql, a))[0];
+export const all = async (sql, ...a) => plain(await exec(sql, a));
+export const run = async (sql, ...a) => { const r = await exec(sql, a); return { changes: r.rowsAffected, lastInsertRowid: Number(r.lastInsertRowid ?? 0) }; };
 export const now = () => Date.now();
 
-export function audit(userId, event, detail, ip) {
-  run('INSERT INTO audit_log (user_id, event, detail, ip, at) VALUES (?,?,?,?,?)', userId ?? null, event, detail ? JSON.stringify(detail) : null, ip ?? null, now());
+export async function audit(userId, event, detail, ip) {
+  await run('INSERT INTO audit_log (user_id, event, detail, ip, at) VALUES (?,?,?,?,?)', userId ?? null, event, detail ? JSON.stringify(detail) : null, ip ?? null, now());
 }
 
-export function tx(fn) {
-  db.exec('BEGIN');
-  try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+// Runs fn inside a write transaction; fn receives one/all/run bound to it.
+export async function tx(fn) {
+  await ready;
+  const t = await db.transaction('write');
+  const q = async (sql, a) => t.execute({ sql, args: a.map(x => (x === undefined ? null : x)) });
+  const h = {
+    one: async (sql, ...a) => plain(await q(sql, a))[0],
+    all: async (sql, ...a) => plain(await q(sql, a)),
+    run: async (sql, ...a) => { const r = await q(sql, a); return { changes: r.rowsAffected, lastInsertRowid: Number(r.lastInsertRowid ?? 0) }; },
+  };
+  try { const r = await fn(h); await t.commit(); return r; } catch (e) { await t.rollback(); throw e; } finally { t.close(); }
 }
