@@ -1,0 +1,33 @@
+# Free hosting on Render. Click "Deploy to Render" in the README, or: Render > New > Blueprint > this repo.
+# The free plan has no persistent disk, so data lives in a free Turso database (DATABASE_URL).
+services:
+  - type: web
+    name: quantpocket
+    runtime: node
+    plan: free
+    rootDir: web
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - { key: NODE_ENV, value: production }
+      - { key: ENCRYPTION_KEY, generateValue: true }
+      - { key: CRON_SECRET, generateValue: true }
+      - { key: PUBLIC_URL, sync: false }
+      - { key: ADMIN_EMAIL, sync: false }
+      - { key: DATABASE_URL, sync: false }
+      - { key: DATABASE_AUTH_TOKEN, sync: false }
+      - { key: PUBLIC_ORIGINS, value: "https://aryebleich.github.io" }
+      - { key: ALPACA_KEY_ID, sync: false }
+      - { key: ALPACA_SECRET, sync: false }
+      - { key: ANTHROPIC_API_KEY, sync: false }
+      - { key: RESEND_API_KEY, sync: false }
+      - { key: EMAIL_FROM, sync: false }
+      - { key: TWILIO_ACCOUNT_SID, sync: false }
+      - { key: TWILIO_AUTH_TOKEN, sync: false }
+      - { key: TWILIO_FROM, sync: false }
+      - { key: STRIPE_SECRET_KEY, sync: false }
+      - { key: STRIPE_WEBHOOK_SECRET, sync: false }
+      - { key: STRIPE_PRICE_PRO, sync: false }
+      - { key: STRIPE_PRICE_ELITE, sync: false }
